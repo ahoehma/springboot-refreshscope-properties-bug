@@ -36,7 +36,7 @@ mvn -pl sba-service spring-boot:run
 mvn -pl app-service spring-boot:run
 ```
 
-## What to look at
+## What to look at — Bug 1: `/actuator/configprops` proxy leak
 
 1. Open http://localhost:9090 — you should see `app-service` registered.
 2. Click into the instance → **Configuration Properties**.
@@ -48,13 +48,41 @@ mvn -pl app-service spring-boot:run
    PLUS spurious `targetSource.beanFactory.applicationStartup.bufferedTimeline.events[N].endTime`
    entries, often hundreds of them. `demo.without-refresh` shows only the legitimate fields.
 
-## Direct curl
-
+Direct curl:
 ```
-curl -s http://localhost:8080/actuator/configprops | jq '.contexts | to_entries[].value.beans | with_entries(select(.key | test("demo")))'
+curl -s http://localhost:8080/actuator/configprops \
+  | jq '.contexts | to_entries[].value.beans | with_entries(select(.key | test("demo")))'
 ```
 
-Look for the keys under `demo.with-refresh`. If they include `targetSource`, the bug is reproduced.
+## What to look at — Bug 2: `@RefreshScope` blocks `ConfigurationPropertiesRebinder`
+
+Even more interesting: an `EnvironmentChangeEvent` (the trigger
+`ConfigurationPropertiesRebinder` reacts to) silently fails to rebind
+the `@RefreshScope`-wrapped bean. `DemoController` exposes the proof:
+
+```bash
+# 1. read initial values
+curl -s http://localhost:8080/demo/values
+
+# 2. push a new value into the env + publish EnvironmentChangeEvent
+curl -X POST "http://localhost:8080/demo/set?key=demo.with-refresh.max-size&value=999"
+curl -X POST "http://localhost:8080/demo/set?key=demo.without-refresh.max-size&value=999"
+
+# 3. read again — withoutRefresh.maxSize == 999, withRefresh.maxSize STILL == 200
+curl -s http://localhost:8080/demo/values
+
+# 4. trigger /actuator/refresh (clears RefreshScope) and read once more —
+#    now withRefresh.maxSize == 999 too
+curl -X POST http://localhost:8080/actuator/refresh
+curl -s http://localhost:8080/demo/values
+```
+
+The takeaway: **`@RefreshScope` on a `@ConfigurationProperties` bean is
+an anti-pattern.** `ConfigurationPropertiesRebinder` already handles
+re-binding on `EnvironmentChangeEvent` for plain `@ConfigurationProperties`
+beans. Adding `@RefreshScope` hides the bean behind a CGLIB proxy whose
+scoped target is invisible to the rebinder, so live refresh requires the
+much heavier `/actuator/refresh` call instead.
 
 ## Cleanup
 
