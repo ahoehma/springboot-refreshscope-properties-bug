@@ -1,0 +1,38 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: app-service
+  boot:
+    admin:
+      client:
+        url: http://localhost:9090
+        instance:
+          prefer-ip: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: '*'
+  endpoint:
+    configprops:
+      access: unrestricted
+      show-values: always
+    env:
+      access: unrestricted
+      show-values: always
+    health:
+      access: unrestricted
+      show-details: always
+
+demo:
+  with-refresh:
+    enabled: true
+    max-size: 200
+    name: refresh-demo
+  without-refresh:
+    enabled: true
+    max-size: 100
+    name: plain-demo
